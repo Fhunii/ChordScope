@@ -1,0 +1,20 @@
+.audition {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.audition label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.notes .note {
+  background: #202839;
+  color: #fff;
+}
+.notes .note:hover {
+  border-color: var(--green);
+  background: #263548;
+}
