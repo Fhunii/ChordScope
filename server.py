@@ -186,10 +186,10 @@ def analyze():
       notes=[PITCHES[(top[2]+i)%12] for i in top[3]]
       voicing=original_voicing(top[2],top[3],octave_notes,bass_pc)
       detected=[PITCHES[i] for i in np.argsort(energy)[::-1][:8] if energy[i]>.16]
-      return jsonify(chord=top[1],degree=degree,bass=PITCHES[bass_pc],notes=notes,voicing=voicing,detected_notes=detected,
+      return jsonify(chord=top[1],degree=degree,bass=PITCHES[bass_pc],notes=notes,voicing=voicing,playback_pitches=voicing,detected_notes=detected,
         lead_notes=lead_notes,detected_pitches=octave_notes,lead_suppression=round(lead_suppression*100),
         ai_notes=ai_notes,confidence=conf,
-        alternatives=[{"chord":x[1],"notes":[PITCHES[(x[2]+iv)%12] for iv in x[3]],"voicing":original_voicing(x[2],x[3],octave_notes,bass_pc),"confidence":max(20,round(conf-(i+1)*5-(top[0]-x[0])*110))} for i,x in enumerate(choices[1:])],
+        alternatives=[{"chord":x[1],"notes":[PITCHES[(x[2]+iv)%12] for iv in x[3]],"voicing":original_voicing(x[2],x[3],octave_notes,bass_pc),"playback_pitches":original_voicing(x[2],x[3],octave_notes,bass_pc),"confidence":max(20,round(conf-(i+1)*5-(top[0]-x[0])*110))} for i,x in enumerate(choices[1:])],
         explanation="Basic Pitchの音高推定、打楽器を抑えたクロマ、低域のベース候補を統合したローカル解析です。")
     except Exception as exc: return jsonify(error=str(exc)),500
     finally:
