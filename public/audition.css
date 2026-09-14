@@ -33,3 +33,19 @@
   border-top-color: #a996ff;
   background: #282442;
 }
+.midiPanel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #121824;
+}
+.midiPanel > div { margin-right: 5px; }
+.midiPanel > div small { display: block; }
+.midiPanel label { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.midiPanel input[type="number"] { width: 68px; }
+.midiPanel input[type="range"] { width: 90px; }
