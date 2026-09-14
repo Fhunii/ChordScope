@@ -1,5 +1,5 @@
 from __future__ import annotations
-import io, os, tempfile
+import io, os, struct, tempfile
 import numpy as np
 import librosa
 import soundfile as sf
@@ -152,6 +152,57 @@ def render_lead_reduced(path, strength):
     memory.seek(0)
     return memory
 
+def _vlq(value):
+    value=max(0,int(value)); out=[value&0x7f]
+    while value>>7:
+      value>>=7; out.append((value&0x7f)|0x80)
+    return bytes(reversed(out))
+
+def lead_midi(path,bpm=120,threshold=.45,low=48,high=96,min_duration=.09,quantize=.55,merge_gap=.10,mono=True):
+    from basic_pitch.inference import predict
+    _,_,events=predict(path)
+    notes=[]; grid=60/max(30,bpm)/4
+    for event in events:
+      begin,finish,pitch,amplitude,*_=event
+      begin=float(begin); finish=float(finish); pitch=int(pitch); amplitude=float(amplitude)
+      if amplitude<threshold or pitch<low or pitch>high or finish-begin<min_duration: continue
+      snapped_begin=round(begin/grid)*grid; snapped_finish=max(snapped_begin+min_duration,round(finish/grid)*grid)
+      begin=begin+(snapped_begin-begin)*quantize; finish=finish+(snapped_finish-finish)*quantize
+      notes.append({'start':max(0,begin),'end':max(begin+.02,finish),'pitch':pitch,'amp':amplitude})
+    notes.sort(key=lambda n:(n['start'],-n['amp']))
+    merged=[]
+    for note in notes:
+      same=next((n for n in reversed(merged) if n['pitch']==note['pitch'] and note['start']-n['end']<=merge_gap),None)
+      if same:
+        same['end']=max(same['end'],note['end']); same['amp']=max(same['amp'],note['amp'])
+      else: merged.append(note)
+    if mono:
+      mono_notes=[]
+      for note in sorted(merged,key=lambda n:(n['start'],-n['amp'])):
+        if mono_notes and note['start']<mono_notes[-1]['end']:
+          previous=mono_notes[-1]
+          if note['amp']>previous['amp']*1.05:
+            previous['end']=note['start']
+            if previous['end']-previous['start']<.02: mono_notes.pop()
+          else: continue
+        mono_notes.append(note)
+      merged=mono_notes
+    if not merged: raise ValueError('条件に合うリード音を検出できませんでした。感度を下げるか音域を広げてください。')
+    ticks_per_beat=480; ticks_per_second=ticks_per_beat*bpm/60
+    messages=[]
+    for note in merged:
+      velocity=max(1,min(127,round(note['amp']*127)))
+      messages.append((round(note['start']*ticks_per_second),1,bytes([0x90,note['pitch'],velocity])))
+      messages.append((round(note['end']*ticks_per_second),0,bytes([0x80,note['pitch'],0])))
+    messages.sort(key=lambda x:(x[0],x[1]))
+    tempo=round(60_000_000/bpm); track=bytearray(b'\x00\xff\x51\x03'+tempo.to_bytes(3,'big'))
+    previous_tick=0
+    for tick,_,message in messages:
+      track.extend(_vlq(tick-previous_tick)); track.extend(message); previous_tick=tick
+    track.extend(b'\x00\xff\x2f\x00')
+    data=io.BytesIO(); data.write(b'MThd'+struct.pack('>IHHH',6,0,1,ticks_per_beat)); data.write(b'MTrk'+struct.pack('>I',len(track))+track); data.seek(0)
+    return data,len(merged)
+
 @app.post("/api/lead-preview")
 def lead_preview():
     audio=request.files.get("audio")
@@ -192,6 +243,29 @@ def analyze():
         alternatives=[{"chord":x[1],"notes":[PITCHES[(x[2]+iv)%12] for iv in x[3]],"voicing":original_voicing(x[2],x[3],octave_notes,bass_pc),"playback_pitches":original_voicing(x[2],x[3],octave_notes,bass_pc),"confidence":max(20,round(conf-(i+1)*5-(top[0]-x[0])*110))} for i,x in enumerate(choices[1:])],
         explanation="Basic Pitchの音高推定、打楽器を抑えたクロマ、低域のベース候補を統合したローカル解析です。")
     except Exception as exc: return jsonify(error=str(exc)),500
+    finally:
+      if tmp and os.path.exists(tmp): os.unlink(tmp)
+
+@app.post("/api/lead-midi")
+def export_lead_midi():
+    audio=request.files.get('audio')
+    if not audio: return jsonify(error='音声がありません'),400
+    tmp=None
+    try:
+      bpm=max(30,min(300,float(request.form.get('bpm','120'))))
+      threshold=max(.05,min(.95,1-float(request.form.get('sensitivity','45'))/100))
+      low=max(0,min(127,int(request.form.get('low','48')))); high=max(low,min(127,int(request.form.get('high','96'))))
+      minimum=max(.02,min(1,float(request.form.get('min_duration','90'))/1000))
+      quantize=max(0,min(1,float(request.form.get('quantize','55'))/100))
+      merge_gap=max(0,min(.5,float(request.form.get('merge_gap','100'))/1000))
+      mono=request.form.get('mode','mono')=='mono'
+      with tempfile.NamedTemporaryFile(suffix='.wav',delete=False) as f:
+        audio.save(f); tmp=f.name
+      midi,count=lead_midi(tmp,bpm,threshold,low,high,minimum,quantize,merge_gap,mono)
+      response=send_file(midi,mimetype='audio/midi',as_attachment=True,download_name='ChordScope-lead.mid')
+      response.headers['X-MIDI-Note-Count']=str(count)
+      return response
+    except Exception as exc: return jsonify(error=str(exc)),422
     finally:
       if tmp and os.path.exists(tmp): os.unlink(tmp)
 
